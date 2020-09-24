@@ -33,7 +33,7 @@ defmodule ModuleDependencyVisualizer do
   def analyze(file_paths) when is_list(file_paths) do
     Enum.flat_map(file_paths, fn file_path ->
       {:ok, file} = File.read(file_path)
-      analyze(file)
+      analyze(file_path, file)
     end)
   end
 
@@ -43,19 +43,26 @@ defmodule ModuleDependencyVisualizer do
   correctly and that's pretty easy.
   """
   @spec analyze(String.t()) :: [{String.t(), String.t()}]
-  def analyze(file) when is_binary(file) do
-    {:ok, ast} = Code.string_to_quoted(file)
+  def analyze(file_path, file) when is_binary(file) do
+    case Code.string_to_quoted(file) do
+      {:ok, ast} ->
+        {_, all_modules} =
+          Macro.postwalk(ast, [], fn
+            ast = {:defmodule, _meta, module_ast}, modules ->
+              {ast, modules ++ [deps_for_module(module_ast)]}
 
-    {_, all_modules} =
-      Macro.postwalk(ast, [], fn
-        ast = {:defmodule, _meta, module_ast}, modules ->
-          {ast, modules ++ [deps_for_module(module_ast)]}
+            ast, modules ->
+              {ast, modules}
+          end)
 
-        ast, modules ->
-          {ast, modules}
-      end)
+        List.flatten(all_modules)
 
-    List.flatten(all_modules)
+      {:error, {line, error, token}} ->
+        raise SyntaxError,
+          file: file_path,
+          line: line,
+          description: "#{error}#{token}"
+    end
   end
 
   defp deps_for_module(ast) do
@@ -229,6 +236,10 @@ defmodule ModuleDependencyVisualizer do
     graph_path = "./graph.png"
     File.write(gv_file_path, gv_file)
     System.cmd("dot", ["-Tpng", gv_file_path, "-o", graph_path])
-    System.cmd("open", [graph_path])
+    System.cmd(png_viewer(), [graph_path])
+  end
+
+  defp png_viewer do
+    Application.get_env(:module_dependency_visualizer, :png_viewer, "open")
   end
 end
